@@ -1,0 +1,34 @@
+[
+  {
+    "Name": "call_sound_1",
+    "FileHash": "84A1B4E11D634DBFA1E5DD97A96DE3AD"
+  },
+  {
+    "Name": "call_sound_2",
+    "FileHash": "C6E92752668DDE4EEE5923D70441579F"
+  },
+  {
+    "Name": "end_call",
+    "FileHash": "7E125DC075EC6E5AE796E4C3AB83ABB3"
+  },
+  {
+    "Name": "join_channel",
+    "FileHash": "5DD43C946894005258D85770F0D10CFF"
+  },
+  {
+    "Name": "leave_channel",
+    "FileHash": "4FCFEB2CBA26459C4750E60F626CEBDC"
+  },
+  {
+    "Name": "notification_sound",
+    "FileHash": "DD920C06A01E5BB8B09678581E29D56F"
+  },
+  {
+    "Name": "start_streaming",
+    "FileHash": "9CA817F41727EDC1B2F1BC4F1911107C"
+  },
+  {
+    "Name": "stop_streaming",
+    "FileHash": "4E30F98AA537854F79F49A76AF822BBC"
+  }
+]

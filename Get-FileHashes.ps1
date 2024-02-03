@@ -1,13 +1,5 @@
 param($cache_file_names_and_paths)
 
-function get_cache_dir_path() {
-    Join-Path $env:APPDATA -ChildPath 'discord\Cache\Cache_Data'
-}
-
-function get_cache_file_names_and_paths($cache_dir_path) {
-    Get-ChildItem -Path $cache_dir_path -Filter 'f_*' -File | ForEach-Object { [PSCustomObject]@{ FileName = $_.Name; FilePath = $_.FullName } }
-}
-
 function get_random_string($length) {
     $charset = [char]'A'..[char]'Z' + [char]'a'..[char]'z' | ForEach-Object { [char]$_ }
     $charset += 0..9
@@ -73,7 +65,9 @@ function should_process_completed_jobs($completed_jobs_count) {
 }
 
 function read_hashed_files_from_completed_jobs($completed_jobs) {
-    $completed_jobs | Receive-Job | ForEach-Object { [pscustomobject]@{ FileName = $_.FileName; FilePath = $_.FilePath; FileHash = $_.FileHash } }
+    $hashed_files = @()
+    $hashed_files += $completed_jobs | Receive-Job | ForEach-Object { [pscustomobject]@{ FileName = $_.FileName; FilePath = $_.FilePath; FileHash = $_.FileHash } }
+    return Write-Output $hashed_files -NoEnumerate
 }
 
 function remove_completed_jobs($completed_jobs) {
@@ -122,7 +116,7 @@ while ($should_run_hashfile_process_loop -eq $true) {
     
     if ($should_process_completed_jobs -eq $true) {
         $hashed_files_from_completed_jobs = read_hashed_files_from_completed_jobs $completed_jobs
-        $hashed_files_list.Add($hashed_files_from_completed_jobs) | Out-Null
+        $hashed_files_list.AddRange($hashed_files_from_completed_jobs) | Out-Null
         remove_completed_jobs $completed_jobs
         $hashed_files_from_completed_jobs | ForEach-Object { Write-Debug "Hashed file $($_.FileName)" }
     }
