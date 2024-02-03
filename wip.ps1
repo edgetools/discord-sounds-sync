@@ -36,7 +36,7 @@ function save_database_to_file() {
 function load_items() {
     param($Items, $ItemsDir, $Filter)
 
-    Get-ChildItem -Path $ItemsDir -Filter $Filter -File | Select-Object -First 10 | ForEach-Object {
+    Get-ChildItem -Path $ItemsDir -Filter $Filter -File | ForEach-Object {
         if ($null -ne $Items) {
             if ($null -eq ($Items[$_.BaseName])) {
                 $Items[$_.BaseName] = @{
@@ -57,6 +57,22 @@ function load_custom_items() {
     param($CustomItems, $CustomItemsDir)
 
     load_items $CustomItems $CustomItemsDir '*.wav'
+}
+
+function prune_missing_items() {
+    param ($Items)
+
+    $items_to_remove = [System.Collections.Generic.List[psobject]]@()
+    foreach ($item in $Items.GetEnumerator()) {
+        if ((Test-Path $item.Value.Path -PathType Leaf) -eq $false) {
+            $items_to_remove.Add($item.Key)
+        }
+    }
+
+    foreach ($item in $items_to_remove) {
+        $Items.Remove($item)
+        Write-Debug "Pruned missing item $item"
+    }
 }
 
 function calculate_item_hashes() {
@@ -263,9 +279,13 @@ if ([string]::IsNullOrWhiteSpace($database.CustomItemsDir)) {
 
 load_cache_items $database.CacheItems $database.CacheItemsDir
 
+prune_missing_items $database.CacheItems
+
 calculate_item_hashes $database.CacheItems
 
 load_custom_items $database.CustomItems $database.CustomItemsDir
+
+prune_missing_items $database.CustomItems
 
 calculate_item_hashes $database.CustomItems
 
