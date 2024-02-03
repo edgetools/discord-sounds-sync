@@ -1,3 +1,4 @@
+$DebugPreference = 'Continue'
 
 function get_cache_dir_path() {
     Join-Path $env:APPDATA -ChildPath 'discord\Cache\Cache_Data'
@@ -71,42 +72,65 @@ function should_process_completed_jobs($completed_jobs_count) {
     }
 }
 
-function receive_completed_jobs($completed_jobs) {
+function read_hashed_files_from_completed_jobs($completed_jobs) {
     $completed_jobs | Receive-Job | ForEach-Object { [pscustomobject]@{ FileName = $_.FileName; FilePath = $_.FilePath; FileHash = $_.FileHash } }
 }
 
-$cache_dir_path = get_cache_dir_path
-$cache_file_names_and_paths_stack = [System.Collections.Stack]::new((get_cache_file_names_and_paths $cache_dir_path | Select-Object -First 3))
+function remove_completed_jobs($completed_jobs) {
+    $completed_jobs | Remove-Job
+}
 
-$job_prefix = generate_job_prefix
-
-$jobs = get_jobs $job_prefix
-
-$running_jobs = get_running_jobs $jobs
-
-$maximum_parallel_jobs_count = 5
-
-$should_start_more_jobs = should_start_more_jobs $running_jobs.Count $maximum_parallel_jobs_count $cache_file_names_and_paths_stack.Count
-
-if ($should_start_more_jobs -eq $true) {
-    $number_of_jobs_to_start = number_of_jobs_to_start $running_jobs.Count $maximum_parallel_jobs_count $cache_file_names_and_paths_stack.Count
-
-    for ($i = 0; $i -lt $number_of_jobs_to_start; $i++) {
-        $cache_file_name_and_path = $cache_file_names_and_paths_stack.Pop()
-        $job_name = format_job_name $job_prefix $cache_file_name_and_path.FileName
-        start_hash_job $job_name $cache_file_name_and_path.FileName $cache_file_name_and_path.FilePath
+function should_run_hashfile_process_loop($total_jobs_count, $should_start_more_jobs) {
+    if (($total_jobs_count -eq 0) -and ($should_start_more_jobs -eq $false)) {
+        return $false
+    } else {
+        return $true
     }
 }
 
-$completed_jobs = get_completed_jobs $jobs
+$cache_dir_path = get_cache_dir_path
+$cache_file_names_and_paths_stack = [System.Collections.Stack]::new((get_cache_file_names_and_paths $cache_dir_path))
 
-$hashed_files = [System.Collections.ArrayList]@()
+$job_prefix = generate_job_prefix
 
-$should_process_completed_jobs = should_process_completed_jobs $completed_jobs.Count
+$hashed_files_list = [System.Collections.ArrayList]@()
 
-if ($should_process_completed_jobs -eq $true) {
-    $received_jobs = receive_completed_jobs $completed_jobs
-    $hashed_files.Add($received_jobs) | Out-Null
+$should_run_hashfile_process_loop = $true
+
+while ($should_run_hashfile_process_loop -eq $true) {
+    $jobs = get_jobs $job_prefix
+    
+    $running_jobs = get_running_jobs $jobs
+    
+    $maximum_parallel_jobs_count = 10
+    
+    $should_start_more_jobs = should_start_more_jobs $running_jobs.Count $maximum_parallel_jobs_count $cache_file_names_and_paths_stack.Count
+    
+    if ($should_start_more_jobs -eq $true) {
+        $number_of_jobs_to_start = number_of_jobs_to_start $running_jobs.Count $maximum_parallel_jobs_count $cache_file_names_and_paths_stack.Count
+    
+        for ($i = 0; $i -lt $number_of_jobs_to_start; $i++) {
+            $cache_file_name_and_path = $cache_file_names_and_paths_stack.Pop()
+            $job_name = format_job_name $job_prefix $cache_file_name_and_path.FileName
+            Write-Debug "Starting job $job_name"
+            start_hash_job $job_name $cache_file_name_and_path.FileName $cache_file_name_and_path.FilePath
+        }
+    }
+    
+    $completed_jobs = get_completed_jobs $jobs
+    
+    $should_process_completed_jobs = should_process_completed_jobs $completed_jobs.Count
+    
+    if ($should_process_completed_jobs -eq $true) {
+        $hashed_files_from_completed_jobs = read_hashed_files_from_completed_jobs $completed_jobs
+        $hashed_files_list.Add($hashed_files_from_completed_jobs) | Out-Null
+        remove_completed_jobs $completed_jobs
+        $hashed_files_from_completed_jobs | ForEach-Object { Write-Debug "Hashed file $($_.FileName)" }
+    }
+
+    $should_run_hashfile_process_loop = should_run_hashfile_process_loop $jobs.Count $should_start_more_jobs
+
+    Start-Sleep -Milliseconds 100
 }
 
-$hashed_files
+Write-Output $hashed_files_list
