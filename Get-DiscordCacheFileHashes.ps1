@@ -1,4 +1,4 @@
-$DebugPreference = 'Continue'
+param($cache_file_names_and_paths)
 
 function get_cache_dir_path() {
     Join-Path $env:APPDATA -ChildPath 'discord\Cache\Cache_Data'
@@ -88,8 +88,7 @@ function should_run_hashfile_process_loop($total_jobs_count, $should_start_more_
     }
 }
 
-$cache_dir_path = get_cache_dir_path
-$cache_file_names_and_paths_stack = [System.Collections.Stack]::new((get_cache_file_names_and_paths $cache_dir_path))
+$cache_file_names_and_paths_stack = [System.Collections.Stack]::new($cache_file_names_and_paths)
 
 $job_prefix = generate_job_prefix
 
@@ -133,4 +132,4 @@ while ($should_run_hashfile_process_loop -eq $true) {
     Start-Sleep -Milliseconds 100
 }
 
-Write-Output $hashed_files_list
+Write-Output $hashed_files_list.ToArray()
