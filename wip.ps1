@@ -1,15 +1,11 @@
-# [CmdletBinding()]
-# param(
-#     [Parameter(Mandatory = $true)]
-#     [string] $SourceDir,
-
-#     [string] $KnownFilesPath = '.\known_files.json',
-
-#     [ValidateSet('Call1', 'Call2', 'EndCall', 'JoinChannel', 'LeaveChannel', 'Notification', 'StreamStarted', 'StreamEnded')]
-#     [string] $SoundType
-# )
+[CmdletBinding()]
+param(
+    [string] $CustomItemsDir
+)
 
 $DebugPreference = 'Continue'
+
+$DatabaseVersion = 2
 
 function load_database_from_file() {
     $database_file_path = '.\database.ps1xml'
@@ -19,24 +15,28 @@ function load_database_from_file() {
     }
 }
 
+function database_version_mismatch() {
+    param($Database, $DatabaseVersion)
+
+    if (($null -eq $Database.Version) -or ($Database.Version -ne $DatabaseVersion)) {
+        Write-Debug "Database version mismatch"
+        return $true
+    } else {
+        Write-Debug "Database version matches"
+        return $false
+    }
+}
+
 function save_database_to_file() {
     param($database)
     $database_file_path = '.\database.ps1xml'
     $database | Export-Clixml $database_file_path
 }
 
-function load_cache_items() {
-    param($Items)
+function load_items() {
+    param($Items, $ItemsDir, $Filter)
 
-    $cache_dir = Join-Path $env:APPDATA -ChildPath 'discord\Cache\Cache_Data'
-
-    # Get-ChildItem -Path $cache_dir -Filter 'f_*' -File | ForEach-Object {
-    #     $Items[$_.BaseName] = @{
-    #         Path = $_.FullName
-    #     }
-    # }
-
-    Get-ChildItem -Path $cache_dir -Filter 'f_*' -File | Select-Object -First 10 | ForEach-Object {
+    Get-ChildItem -Path $ItemsDir -Filter $Filter -File | Select-Object -First 10 | ForEach-Object {
         if ($null -ne $Items) {
             if ($null -eq ($Items[$_.BaseName])) {
                 $Items[$_.BaseName] = @{
@@ -45,6 +45,18 @@ function load_cache_items() {
             }
         }
     }
+}
+
+function load_cache_items() {
+    param($CacheItems, $CacheItemsDir)
+
+    load_items $CacheItems $CacheItemsDir 'f_*'
+}
+
+function load_custom_items() {
+    param($CustomItems, $CustomItemsDir)
+
+    load_items $CustomItems $CustomItemsDir '*.wav'
 }
 
 function calculate_item_hashes() {
@@ -195,11 +207,15 @@ function calculate_item_hashes() {
 
 $database = load_database_from_file
 
-if ($null -eq $database) {
+if (($null -eq $database) -or ((database_version_mismatch $database $DatabaseVersion) -eq $true)) {
+    Write-Debug "Creating new database"
     $database = @{
-        Items = @{}
-        SourceFiles = @{}
-        FileTypes = @(
+        Version = $DatabaseVersion
+        CacheItems = @{}
+        CustomItems = @{}
+        CacheItemsDir = Join-Path $env:APPDATA -ChildPath 'discord\Cache\Cache_Data'
+        CustomItemsDir = $CustomItemsDir
+        ItemTypes = @(
             @{
                 Name = 'Call1'
                 Hash = '84A1B4E11D634DBFA1E5DD97A96DE3AD'
@@ -236,9 +252,22 @@ if ($null -eq $database) {
     }
 }
 
-load_cache_items $database.Items
+if ([string]::IsNullOrWhiteSpace($database.CustomItemsDir)) {
+    if ([string]::IsNullOrWhiteSpace($CustomItemsDir)) {
+        Write-Error "Must specify CustomItemsDir"
+        exit
+    } else {
+        $database.CustomItemsDir = $CustomItemsDir
+    }
+}
 
-calculate_item_hashes $database.Items
+load_cache_items $database.CacheItems $database.CacheItemsDir
+
+calculate_item_hashes $database.CacheItems
+
+load_custom_items $database.CustomItems $database.CustomItemsDir
+
+calculate_item_hashes $database.CustomItems
 
 save_database_to_file $database
 
