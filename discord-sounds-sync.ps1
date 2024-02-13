@@ -1,24 +1,45 @@
 [CmdletBinding()]
 param(
-    [string] $CustomItemsDir
+    [string] $CustomItemsDirPath,
+
+    [switch] $RecreateDB,
+
+    [switch] $ClearCache
 )
 
 $DebugPreference = 'Continue'
+$ErrorActionPreference = 'Stop'
 
 $DatabaseVersion = 2
 
-function load_database_from_file() {
-    $database_file_path = '.\database.ps1xml'
-    if ((Test-Path -Path $database_file_path -PathType Leaf) -eq $True) {
-        $database_file = Import-Clixml $database_file_path
+$DatabaseFilePath = Join-Path $env:LOCALAPPDATA -ChildPath 'edgetools' | Join-Path -ChildPath 'discord-sounds-sync' | Join-Path -ChildPath 'database.ps1xml'
+
+$CacheItemsDirPath = Join-Path $env:APPDATA -ChildPath 'discord' | Join-Path -ChildPath 'Cache' | Join-Path -ChildPath 'Cache_Data'
+
+function load_database_from_file {
+    param($DatabaseFilePath)
+    if ((Test-Path -Path $DatabaseFilePath -PathType Leaf) -eq $True) {
+        $database_file = Import-Clixml $DatabaseFilePath
+        Write-Debug "Loaded database from $DatabaseFilePath"
         return Write-Output $database_file -NoEnumerate
     }
 }
 
-function database_version_mismatch() {
-    param($Database, $DatabaseVersion)
+function save_database_to_file {
+    param($Database, $DatabaseFilePath)
+    $database_file_dir = $DatabaseFilePath | Split-Path -Parent
+    if ((Test-Path -Path $database_file_dir -PathType Container) -eq $false) {
+        New-Item -ItemType Directory -Path $database_file_dir
+        Write-Debug "Created $database_file_dir"
+    }
+    $Database | Export-Clixml $DatabaseFilePath
+    Write-Debug "Saved database to $DatabaseFilePath"
+}
 
-    if (($null -eq $Database.Version) -or ($Database.Version -ne $DatabaseVersion)) {
+function database_version_mismatch {
+    param($VersionUnderTest, $ExpectedVersion)
+
+    if (($null -eq $VersionUnderTest) -or ($VersionUnderTest -ne $ExpectedVersion)) {
         Write-Debug "Database version mismatch"
         return $true
     } else {
@@ -27,39 +48,38 @@ function database_version_mismatch() {
     }
 }
 
-function save_database_to_file() {
-    param($database)
-    $database_file_path = '.\database.ps1xml'
-    $database | Export-Clixml $database_file_path
-}
-
-function load_items() {
+function load_items {
     param($Items, $ItemsDir, $Filter)
 
-    Get-ChildItem -Path $ItemsDir -Filter $Filter -File | ForEach-Object {
-        if ($null -ne $Items) {
-            if ($null -eq ($Items[$_.BaseName])) {
-                $Items[$_.BaseName] = @{
-                    Path = $_.FullName
+    if ((Test-Path $ItemsDir -PathType Container) -eq $True) {
+        Get-ChildItem -Path $ItemsDir -Filter $Filter -File | ForEach-Object {
+            if ($null -ne $Items) {
+                if ($null -eq ($Items[$_.BaseName])) {
+                    $Items[$_.BaseName] = @{
+                        Path = $_.FullName
+                    }
                 }
             }
         }
     }
 }
 
-function load_cache_items() {
+function load_cache_items {
     param($CacheItems, $CacheItemsDir)
 
     load_items $CacheItems $CacheItemsDir 'f_*'
 }
 
-function load_custom_items() {
-    param($CustomItems, $CustomItemsDir)
+function clear_cache {
+    param($CacheItemsDir)
 
-    load_items $CustomItems $CustomItemsDir '*.wav'
+    if ((Test-Path $CacheItemsDir -PathType Container) -eq $True) {
+        Remove-Item $CacheItemsDir -Confirm -Force
+        Write-Debug "Removed $CacheItemsDir"
+    }
 }
 
-function prune_missing_items() {
+function prune_missing_items {
     param ($Items)
 
     $items_to_remove = [System.Collections.Generic.List[psobject]]@()
@@ -75,7 +95,12 @@ function prune_missing_items() {
     }
 }
 
-function calculate_item_hashes() {
+function calculate_item_hash {
+    param($ItemPath)
+    Get-FileHash -Path $ItemPath -Algorithm MD5 | Select-Object -ExpandProperty Hash
+}
+
+function calculate_item_hashes {
     param($Items)
 
     function get_random_string($Length) {
@@ -96,7 +121,8 @@ function calculate_item_hashes() {
     function start_hash_job($JobName, $ItemName, $ItemPath) {
         Start-Job -Name $JobName -ScriptBlock {
             param($ItemName, $ItemPath)
-            $filehash = Get-FileHash -Path $ItemPath -Algorithm MD5 | Select-Object -ExpandProperty Hash
+            $function:calculate_item_hash = "$using:function:calculate_item_hash"
+            $filehash = calculate_item_hash $ItemPath
             [pscustomobject]@{
                 ItemName = $ItemName
                 ItemHash = $filehash
@@ -170,7 +196,7 @@ function calculate_item_hashes() {
             }
         }
 
-        Write-Output $items_without_hashes -NoEnumerate
+        return Write-Output $items_without_hashes -NoEnumerate
     }
 
     $items_without_hashes = find_items_without_hashes $Items
@@ -221,16 +247,56 @@ function calculate_item_hashes() {
     }
 }
 
-$database = load_database_from_file
+function synchronize_item_types {
+    param($ItemTypes, $CacheItems, $CustomItemsDirPath)
 
-if (($null -eq $database) -or ((database_version_mismatch $database $DatabaseVersion) -eq $true)) {
+    foreach ($itemtype in $ItemTypes) {
+        # find matching cache files for item type
+        $cache_files = $CacheItems.GetEnumerator() | Where-Object { $_.Value.Hash -eq $ItemType.Hash }
+
+        foreach ($cache_file in $cache_files) {
+            $custom_item_file_name = $itemtype.Name + '.wav'
+            $custom_item_file_path = Join-Path -Path $CustomItemsDirPath -ChildPath $custom_item_file_name
+
+            # if custom file exists
+            if ((Test-Path -Path $custom_item_file_path -PathType Leaf) -eq $True) {
+                # get item hash
+                $custom_item_hash = calculate_item_hash $custom_item_file_path
+                Write-Debug "Hashed custom file $custom_item_file_path"
+                # if hash doesn't match
+                if ($custom_item_hash -ne $cache_file.Value.Hash) {
+                    # overwrite cache file
+                    Copy-Item -Path $custom_item_file_path -Destination $cache_file.Value.Path
+                    # update cache item hash
+                    $cache_file.Value.Hash = $custom_item_hash
+                    Write-Debug "Copied custom file $custom_item_file_path to $($cache_file.Value.Path)"
+                }
+            } else {
+                # copy cache file to custom dir
+                Copy-Item -Path $cache_file.Value.Path -Destination $custom_item_file_path
+                Write-Debug "Copied unmodified cache file $($cache_file.Value.Path) to $custom_item_file_path"
+            }
+        }
+    }
+}
+
+# ----------------------------------------------------------------------------------------------------
+# ----------------------------------------------- MAIN -----------------------------------------------
+# ----------------------------------------------------------------------------------------------------
+
+$database = $null
+
+if ($RecreateDB -eq $false) {
+    $database = load_database_from_file $DatabaseFilePath
+}
+
+if (($null -eq $database) -or ((database_version_mismatch $database.Version $DatabaseVersion) -eq $true))  {
     Write-Debug "Creating new database"
     $database = @{
         Version = $DatabaseVersion
         CacheItems = @{}
-        CustomItems = @{}
-        CacheItemsDir = Join-Path $env:APPDATA -ChildPath 'discord\Cache\Cache_Data'
-        CustomItemsDir = $CustomItemsDir
+        CacheItemsDir = $CacheItemsDirPath
+        CustomItemsDir = $CustomItemsDirPath
         ItemTypes = @(
             @{
                 Name = 'Call1'
@@ -245,7 +311,7 @@ if (($null -eq $database) -or ((database_version_mismatch $database $DatabaseVer
                 Hash = '7E125DC075EC6E5AE796E4C3AB83ABB3'
             },
             @{
-                Name = 'JoinChannel'
+                Name = 'JoinCall'
                 Hash = '5DD43C946894005258D85770F0D10CFF'
             },
             @{
@@ -269,12 +335,16 @@ if (($null -eq $database) -or ((database_version_mismatch $database $DatabaseVer
 }
 
 if ([string]::IsNullOrWhiteSpace($database.CustomItemsDir)) {
-    if ([string]::IsNullOrWhiteSpace($CustomItemsDir)) {
-        Write-Error "Must specify CustomItemsDir"
+    if ([string]::IsNullOrWhiteSpace($CustomItemsDirPath)) {
+        Write-Error "Must specify CustomItemsDirPath"
         exit
     } else {
-        $database.CustomItemsDir = $CustomItemsDir
+        $database.CustomItemsDir = $CustomItemsDirPath
     }
+}
+
+if ($ClearCache -eq $true) {
+    clear_cache $database.CacheItemsDir
 }
 
 load_cache_items $database.CacheItems $database.CacheItemsDir
@@ -283,28 +353,6 @@ prune_missing_items $database.CacheItems
 
 calculate_item_hashes $database.CacheItems
 
-load_custom_items $database.CustomItems $database.CustomItemsDir
+synchronize_item_types $database.ItemTypes $database.CacheItems $database.CustomItemsDir
 
-prune_missing_items $database.CustomItems
-
-calculate_item_hashes $database.CustomItems
-
-save_database_to_file $database
-
-$database
-
-# calculate_item_hashes $database.Items
-
-# $files_database = [System.Collections.Generic.List[psobject]]@()
-
-# $known_files = Get-Content $KnownFilesPath -Raw | ConvertFrom-Json
-
-# foreach ($known_file in $known_files) {
-#     $new_entry = [PSCustomObject]@{
-#         KnownFileName = $known_file.Name
-#         KnownFileHash = $known_file.ItemHash
-#     }
-#     $files_database.Add($new_entry)
-# }
-
-# Write-Output $files_database -NoEnumerate
+save_database_to_file $database $DatabaseFilePath
